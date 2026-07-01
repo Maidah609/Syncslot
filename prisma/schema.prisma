@@ -1,8 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,24 +9,9 @@ datasource db {
   provider = "postgresql"
 }
 
-model User {
-  id            String         @id @default(cuid())
-  name          String?
-  email         String         @unique
-  password      String?
-  emailVerified DateTime?
-  image         String?
-  timezone      String         @default("UTC")
-
-  accounts      Account[]
-  sessions      Session[]
-  eventTypes    EventType[]
-  availability  Availability[]
-  bookings      Booking[]
-
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-}
+// ─────────────────────────────────────────────
+// AUTH (Auth.js requirements)
+// ─────────────────────────────────────────────
 
 model Account {
   id                String  @id @default(cuid())
@@ -36,17 +19,18 @@ model Account {
   type              String
   provider          String
   providerAccountId String
-  refresh_token     String?
-  access_token      String?
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
   expires_at        Int?
   token_type        String?
   scope             String?
-  id_token          String?
+  id_token          String? @db.Text
   session_state     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
+  @@index([userId])
 }
 
 model Session {
@@ -56,6 +40,8 @@ model Session {
   expires      DateTime
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model VerificationToken {
@@ -66,60 +52,197 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-model EventType {
-  id          String   @id @default(cuid())
-  title       String
-  description String?
-  duration    Int
+// ─────────────────────────────────────────────
+// CORE PRODUCT MODELS
+// ─────────────────────────────────────────────
 
-  userId String
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  bookings Booking[]
+model User {
+  id             String    @id @default(cuid())
+  name           String
+  email          String    @unique
+  emailVerified  DateTime?
+  passwordHash   String?
+  username       String    @unique
+  timezone       String    @default("UTC")
+  avatarUrl      String?
+  brandColor     String?
+  welcomeMessage String?
+  plan           Plan      @default(FREE)
+  onboardingDone Boolean   @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  accounts         Account[]
+  sessions         Session[]
+  eventTypes       EventType[]
+  schedules        Schedule[]
+  calendarAccounts CalendarAccount[]
+  bookingsAsHost   Booking[]         @relation("HostBookings")
 }
 
-model Availability {
-  id        String @id @default(cuid())
+model EventType {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title           String
+  slug            String
+  description     String?
+  durationMinutes Int
+  locationType    LocationType
+  locationValue   String?
+  color           String?
+  isActive        Boolean      @default(true)
+
+  bufferBefore  Int @default(0)
+  bufferAfter   Int @default(0)
+  minNoticeMins Int @default(60)
+  maxFutureDays Int @default(60)
+
+  scheduleId String?
+  schedule   Schedule? @relation(fields: [scheduleId], references: [id])
+
+  questions BookingQuestion[]
+  bookings  Booking[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, slug])
+  @@index([userId])
+}
+
+model BookingQuestion {
+  id          String    @id @default(cuid())
+  eventTypeId String
+  eventType   EventType @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+
+  label    String
+  type     QuestionType
+  required Boolean      @default(true)
+  options  String[]
+
+  @@index([eventTypeId])
+}
+
+model Schedule {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name      String
+  timezone  String
+  isDefault Boolean @default(false)
+
+  rules      AvailabilityRule[]
+  overrides  DateOverride[]
+  eventTypes EventType[]
+
+  @@index([userId])
+}
+
+model AvailabilityRule {
+  id         String   @id @default(cuid())
+  scheduleId String
+  schedule   Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
 
   dayOfWeek Int
-
   startTime String
+  endTime   String
 
-  endTime String
+  @@index([scheduleId])
+}
 
-  userId String
+model DateOverride {
+  id         String   @id @default(cuid())
+  scheduleId String
+  schedule   Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date          DateTime
+  isUnavailable Boolean  @default(true)
+  startTime     String?
+  endTime       String?
+
+  @@index([scheduleId])
 }
 
 model Booking {
   id String @id @default(cuid())
 
-  guestName String
+  eventTypeId String
+  eventType   EventType @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
 
-  guestEmail String
+  hostId String
+  host   User   @relation("HostBookings", fields: [hostId], references: [id], onDelete: Cascade)
+
+  inviteeName     String
+  inviteeEmail    String
+  inviteeTimezone String
 
   startTime DateTime
+  endTime   DateTime
+  status    BookingStatus @default(CONFIRMED)
+  answers   Json?
 
-  endTime DateTime
-
-  notes String?
-
-  status String @default("PENDING")
-
-  userId String
-
-  eventTypeId String
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  eventType EventType @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+  rescheduleToken String  @unique @default(cuid())
+  cancelReason    String?
+  calendarEventId String?
+  videoLink       String?
 
   createdAt DateTime @default(now())
-
   updatedAt DateTime @updatedAt
+
+  @@index([hostId])
+  @@index([eventTypeId])
+  @@index([startTime])
 }
 
+model CalendarAccount {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  provider      CalendarProvider
+  accessToken   String
+  refreshToken  String
+  expiresAt     DateTime
+  externalEmail String
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum Plan {
+  FREE
+  PRO
+  TEAM
+}
+
+enum LocationType {
+  ZOOM
+  GOOGLE_MEET
+  PHONE
+  IN_PERSON
+  CUSTOM
+}
+
+enum QuestionType {
+  TEXT
+  MULTIPLE_CHOICE
+  YES_NO
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+  RESCHEDULED
+}
+
+enum CalendarProvider {
+  GOOGLE
+  MICROSOFT
+}
